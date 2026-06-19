@@ -41,34 +41,38 @@ def start_health_server():
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"❌ یک خطای داخلی رخ داد! جزئیات: {context.error}")
 
-# ── سیستم پاسخگویی پشتیبان به شاگرد (اتصال مسیر برگشت پیام‌ها) ─────────────────
+# ── سیستم پاسخگویی پیشرفته پشتیبان (پشتیبانی کامل از عکس و رسانه) ─────────────────
 async def reply_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     msg = update.message
+    if not msg: return
     
-    # فقط پشتیبان‌ها و ناظرین اجازه پاسخگویی دارند
+    # بررسی دسترسی
     if user_id not in SUPPORT_IDS and user_id not in SUPERVISOR_IDS:
         await msg.reply_text("⛔ شما دسترسی ارسال پاسخ را ندارید.")
         return
 
-    # بررسی ساختار درست دستور
-    if not context.args or len(context.args) < 2:
+    # استخراج متن چه از پیام متنی معمولی و چه از کپشنِ عکس/رسانه
+    full_text = msg.text or msg.caption or ""
+    parts = full_text.split()
+
+    if len(parts) < 2:
         await msg.reply_text(
             "❌ <b>روش استفاده اشتباه است!</b>\n\n"
-            "طرز استفاده: <code>/reply [شماره تکلیف] [متن جواب شما]</code>\n"
-            "مثال: <code>/reply 12 تکلیفت عالی بود، آفرین!</code>", 
+            "طرز استفاده متنی: <code>/reply [شماره] [متن]</code>\n"
+            "طرز استفاده با عکس: دستور <code>/reply [شماره] [متن]</code> را روی عکس خود کپشن (Caption) کنید.", 
             parse_mode="HTML"
         )
         return
 
     try:
-        hw_id = int(context.args[0])
-        reply_text = " ".join(context.args[1:])
+        hw_id = int(parts[1])
+        reply_text = " ".join(parts[2:])
     except ValueError:
         await msg.reply_text("❌ شماره تکلیف باید یک عدد باشد!")
         return
 
-    # پیدا کردن اطلاعات تکلیف و شاگرد از دیتابیس
+    # پیدا کردن اطلاعات تکلیف
     hw = db.get_homework(hw_id)
     if not hw:
         await msg.reply_text("❌ تکلیفی با این شماره در سیستم پیدا نشد!")
@@ -76,33 +80,40 @@ async def reply_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     student_id = hw['student_id']
     sender_name = msg.from_user.username or msg.from_user.first_name
+    
+    # قالب پیام خروجی برای شاگرد
+    caption_text = f"📩 <b>پاسخ پشتیبان به تکلیف شماره {hw_id}:</b>\n\n{reply_text}"
 
-    # ۱. ارسال پاسخ مستقیم برای شاگرد
     try:
-        await context.bot.send_message(
-            chat_id=student_id,
-            text=f"📩 <b>پاسخ پشتیبان به تکلیف شماره {hw_id}:</b>\n\n{reply_text}",
-            parse_mode="HTML"
-        )
-        # ذخیره وضعیت پاسخ در دیتابیس
-        db.save_reply(hw_id, reply_text)
-        await msg.reply_text("✅ پاسخ شما با موفقیت برای شاگرد ارسال و ثبت شد.")
+        # تشخیص نوع رسانه و ارسال هوشمند آن به شاگرد
+        if msg.photo:
+            await context.bot.send_photo(chat_id=student_id, photo=msg.photo[-1].file_id, caption=caption_text, parse_mode="HTML")
+        elif msg.voice:
+            await context.bot.send_voice(chat_id=student_id, voice=msg.voice.file_id, caption=caption_text, parse_mode="HTML")
+        elif msg.document:
+            await context.bot.send_document(chat_id=student_id, document=msg.document.file_id, caption=caption_text, parse_mode="HTML")
+        elif msg.video:
+            await context.bot.send_video(chat_id=student_id, video=msg.video.file_id, caption=caption_text, parse_mode="HTML")
+        else:
+            await context.bot.send_message(chat_id=student_id, text=caption_text, parse_mode="HTML")
+
+        # ذخیره وضعیت در دیتابیس
+        db.save_reply(hw_id, reply_text if reply_text else "[ارسال رسانه]")
+        await msg.reply_text("✅ پاسخ شما با موفقیت برای شاگرد ارسال شد.")
     except Exception as e:
         await msg.reply_text(f"❌ خطا در ارسال پیام به شاگرد! احتمالاً ربات را بلاک کرده است. جزئیات: {e}")
         return
 
-    # ۲. ارسال هم‌زمان رونوشت پاسخ برای ناظرین کل سیستم
+    # ۳. ارسال هم‌زمان رونوشت پاسخ (همراه رسانه) برای ناظرین کل سیستم
     for sv_id in SUPERVISOR_IDS:
-        if sv_id != user_id:  # اگر خود ناظر جواب نداده بود، براش بفرست
+        if sv_id != user_id:  # اگر خود ناظر جواب نداده بود
             try:
-                await context.bot.send_message(
-                    chat_id=sv_id,
-                    text=f"📣 <b>گزارش پاسخ پشتیبان:</b>\n\n"
-                         f"👨‍🏫 پاسخ‌دهنده: <b>{sender_name}</b>\n"
-                         f"🔢 برای تکلیف شماره: <code>{hw_id}</code>\n"
-                         f"📝 متن پاسخ: {reply_text}",
-                    parse_mode="HTML"
-                )
+                if msg.photo:
+                    await context.bot.send_photo(chat_id=sv_id, photo=msg.photo[-1].file_id, caption=f"📣 <b>گزارش پاسخ (عکس) از {sender_name}:</b>\n\n{caption_text}", parse_mode="HTML")
+                elif msg.voice:
+                    await context.bot.send_voice(chat_id=sv_id, voice=msg.voice.file_id, caption=f"📣 <b>گزارش پاسخ (ویس) از {sender_name}:</b>\n\n{caption_text}", parse_mode="HTML")
+                else:
+                    await context.bot.send_message(chat_id=sv_id, text=f"📣 <b>گزارش پاسخ از {sender_name}:</b>\n\n{caption_text}", parse_mode="HTML")
             except:
                 pass
 
@@ -295,11 +306,10 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg: return
 
-    # اگر پشتیبان/ناظر پیام معمولی و بدون هندلر فرستاد، راهنمایی‌اش کن که چطور پاسخ دهد
     if user_id in SUPERVISOR_IDS or user_id in SUPPORT_IDS:
         await msg.reply_text(
             f"🤖 <b>راهنمای سیستم پیام‌رسانی:</b>\n\n"
-            f"پیام شما به عنوان تکلیف ذخیره نشد. برای پاسخ دادن به تکالیف شاگردان، باید از دستور ریپلای استفاده کنید:\n"
+            f"پیام شما به عنوان تکلیف ذخیره نشد. برای پاسخ دادن به تکالیف شاگردان، باید دستور ریپلای را بنویسید (یا روی عکس کپشن کنید):\n"
             f"<code>/reply [شماره تکلیف] [متن پاسخ]</code>", 
             parse_mode="HTML"
         )
@@ -332,10 +342,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    
-    # ثبت هندلر حیاتی پاسخگویی به تکالیف
     app.add_handler(CommandHandler("reply", reply_homework))
-    
     app.add_handler(CallbackQueryHandler(handle_menus, pattern="^(sv_|support_students:|view_hw:)"))
     app.add_handler(CallbackQueryHandler(choose_role, pattern="^role_"))
     app.add_handler(CallbackQueryHandler(pick_support, pattern="^pick_"))
