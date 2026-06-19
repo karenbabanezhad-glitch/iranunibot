@@ -34,8 +34,6 @@ class Database:
         """)
         self.conn.commit()
 
-    # ── Users ──────────────────────────────────────────────────────────────────
-
     def ensure_user(self, user_id: int, username: str):
         self.conn.execute(
             "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
@@ -84,8 +82,6 @@ class Database:
             "SELECT support_id FROM users WHERE user_id = ?", (student_id,)
         ).fetchone()
         return row["support_id"] if row else None
-
-    # ── Homeworks ──────────────────────────────────────────────────────────────
 
     def save_homework(self, student_id: int, support_id: int,
                       message_id: int, chat_id: int, caption: str) -> int:
