@@ -13,6 +13,6 @@ services:
       - key: DB_PATH
         value: bot_data.db
       - key: WEBHOOK_URL
-        sync: false
+        value: https://iranunibot.onrender.com
       - key: PORT
         value: "10000"
