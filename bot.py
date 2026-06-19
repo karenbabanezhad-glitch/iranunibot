@@ -52,18 +52,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as db_err:
         logger.error(f"⚠️ خطا در دیتابیس: {db_err}")
 
-    # ۱. بررسی خودکار وضعیت ناظر کل از روی پنل رندر
+    # ۱. بررسی خودکار وضعیت ناظر کل
     if user_id in SUPERVISOR_IDS:
         try: db.set_role(user_id, "supervisor")
         except: pass
-        await update.message.reply_text("👁️ *ناظر کل* خوش اومدی!\n\nبرای دیدن همه تکالیف از /all_homeworks استفاده کن.\n\n💡 _نکته تست:_ چون شما ناظر هستید، برای تست ارسال تکلیف حتماً باید از یک اکانت تلگرام دیگر (بدون آیدی ناظر) استفاده کنید.", parse_mode="Markdown")
+        await update.message.reply_text(
+            "👁️ <b>ناظر کل</b> خوش اومدی!\n\n"
+            "برای دیدن همه تکالیف از /all_homeworks استفاده کن.\n\n"
+            "💡 <i>نکته تست:</i> چون شما ناظر هستید، برای تست ارسال تکلیف حتماً باید از یک اکانت تلگرام دیگر (بدون آیدی ناظر) استفاده کنید.", 
+            parse_mode="HTML"
+        )
         return
 
-    # ۲. بررسی خودکار وضعیت پشتیبان از روی پنل رندر
+    # ۲. بررسی خودکار وضعیت پشتیبان
     if user_id in SUPPORT_IDS:
         try: db.set_role(user_id, "support")
         except: pass
-        await update.message.reply_text("✅ شما به عنوان *پشتیبان سیستم* شناسایی شدید!\n\n📥 تکالیف شاگردانتان اینجا ارسال می‌شوند.\nبرای دیدن تکالیف: /my_homeworks", parse_mode="Markdown")
+        await update.message.reply_text(
+            "✅ شما به عنوان <b>پشتیبان سیستم</b> شناسایی شدید!\n\n"
+            "📥 تکالیف شاگردانتان اینجا ارسال می‌شوند.\n"
+            "برای دیدن تکالیف: /my_homeworks", 
+            parse_mode="HTML"
+        )
         return
 
     # ۳. بررسی وضعیت کاربر عادی از روی دیتابیس
@@ -77,7 +87,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if support_id:
                 support_info = db.get_user(support_id)
                 support_name = support_info['username'] if support_info else f"پشتیبان کد {support_id}"
-                await update.message.reply_text(f"✏️ خوش آمدید! پشتیبان شما *{support_name}* است.\n\nلطفاً تکلیف خود را مستقیماً بفرستید:", parse_mode="Markdown")
+                await update.message.reply_text(
+                    f"✏️ خوش آمدید! پشتیبان شما <b>{support_name}</b> است.\n\n"
+                    f"لطفاً تکلیف خود را مستقیماً بفرستید:", 
+                    parse_mode="HTML"
+                )
                 return
         except: pass
 
@@ -99,9 +113,8 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
     if role == "support":
-        await query.edit_message_text("✅ ثبت شدی به عنوان *پشتیبان*!\nبرای دیدن تکالیف: /my_homeworks", parse_mode="Markdown")
+        await query.edit_message_text("✅ ثبت شدی به عنوان <b>پشتیبان</b>!\nبرای دیدن تکالیف: /my_homeworks", parse_mode="HTML")
     else:
-        # دریافت پشتیبان‌های ثبت شده در دیتابیس
         supports = []
         try: supports = db.get_all_supports()
         except: pass
@@ -110,7 +123,6 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for s in supports:
             keyboard.append([InlineKeyboardButton(f"👨‍🏫 {s['username']}", callback_data=f"pick_{s['user_id']}")])
             
-        # راهکار هوشمند: اگر دیتابیس خالی بود، از لیست SUPPORT_IDS رندر استفاده کن
         if not keyboard and SUPPORT_IDS:
             for s_id in SUPPORT_IDS:
                 keyboard.append([InlineKeyboardButton("👨‍🏫 پشتیبان رسمی سیستم", callback_data=f"pick_{s_id}")])
@@ -135,7 +147,7 @@ async def pick_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         name = "پشتیبان سیستم"
         
-    await query.edit_message_text(f"✅ پشتیبانت *{name}* انتخاب شد!\n\n📝 حالا هر تکلیفی بفرستی مستقیم براش ارسال میشه.", parse_mode="Markdown")
+    await query.edit_message_text(f"✅ پشتیبانت <b>{name}</b> انتخاب شد!\n\n📝 حالا هر تکلیفی بفرستی مستقیم براش ارسال میشه.", parse_mode="HTML")
 
 
 async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,7 +157,12 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg: return
 
     if user_id in SUPERVISOR_IDS or user_id in SUPPORT_IDS:
-        await msg.reply_text(f"🤖 *ارتباط زنده است! پیام تست شما دریافت شد.*\n\n⚠️ چون شما جزو مدیریت/پشتیبانان هستید، پیام به عنوان تکلیف ذخیره نمی‌شود. برای تست کامل ارسال تکلیف، باید با یک اکانت تلگرام معمولی (دانش‌آموز) پیام بفرستید.", parse_mode="Markdown")
+        await msg.reply_text(
+            f"🤖 <b>ارتباط زنده است! پیام تست شما دریافت شد.</b>\n\n"
+            f"⚠️ چون شما جزو مدیریت/پشتیبانان هستید، پیام به عنوان تکلیف ذخیره نمی‌شود. "
+            f"برای تست کامل ارسال تکلیف، باید با یک اکانت تلگرام معمولی (دانش‌آموز) پیام بفرستید.", 
+            parse_mode="HTML"
+        )
         return 
 
     try: role = db.get_role(user_id)
@@ -165,7 +182,7 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.forward_message(chat_id=support_id, from_chat_id=msg.chat_id, message_id=msg.message_id)
-        await context.bot.send_message(chat_id=support_id, text=f"📬 تکلیف جدید از *{username}*\n🔢 شماره: `{hw_id}`\nبرای جواب: `/reply {hw_id} [جوابت]`", parse_mode="Markdown")
+        await context.bot.send_message(chat_id=support_id, text=f"📬 تکلیف جدید از <b>{username}</b>\n🔢 شماره: <code>{hw_id}</code>\nبرای جواب: <code>/reply {hw_id} [جوابت]</code>", parse_mode="HTML")
     except Exception as e: logger.error(f"Forward error: {e}")
 
     for sv_id in SUPERVISOR_IDS:
