@@ -6,7 +6,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters, ConversationHandler
+    CallbackQueryHandler, ContextTypes, filters
 )
 from database import Database
 
@@ -15,14 +15,8 @@ logger = logging.getLogger(__name__)
 
 db = Database()
 
-# مراحل گفتگو برای زبان‌آموز
-GETTING_NAME = 1
-CHOOSING_SUPPORT = 2
-STUDENT_SENDING_HOMEWORK = 3
-
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SUPERVISOR_IDS = [int(x) for x in os.environ.get("SUPERVISOR_IDS", "").split(",") if x.strip()]
-SUPPORT_IDS = [int(x) for x in os.environ.get("SUPPORT_IDS", "").split(",") if x.strip()]
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 PORT = int(os.environ.get("PORT", 10000))
 
@@ -30,50 +24,52 @@ PORT = int(os.environ.get("PORT", 10000))
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
+    username = user.username or user.first_name
+    db.ensure_user(user_id, username)
 
-    # ۱. شناسایی خودکار ناظر کل
+    # ۱. بررسی وضعیت ناظر کل
     if user_id in SUPERVISOR_IDS:
-        db.ensure_user(user_id, user.full_name)
         db.set_role(user_id, "supervisor")
-        await update.message.reply_text("👁️ *ناظر کل* خوش اومدی!\n\nشما تمام تکالیف ارسالی و پاسخ‌های پشتیبان‌ها را دریافت خواهید کرد.", parse_mode="Markdown")
-        return ConversationHandler.END
+        await update.message.reply_text("👁️ *ناظر کل* خوش اومدی!\n\nبرای دیدن همه تکالیف از /all_homeworks استفاده کن.", parse_mode="Markdown")
+        return
 
-    # ۲. شناسایی خودکار پشتیبان‌های رسمی
-    if user_id in SUPPORT_IDS:
-        db.ensure_user(user_id, user.full_name)
-        db.set_role(user_id, "support")
-        await update.message.reply_text("✅ شما به عنوان *پشتیبان رسمی* شناسایی شدید!\n\n📥 تکالیف زبان‌آموزانی که شما را انتخاب کنند برایتان ارسال می‌شود.\nبرای مشاهده لیست تکالیف: /my_homeworks", parse_mode="Markdown")
-        return ConversationHandler.END
+    # ۲. بررسی وضعیت کاربران از روی دیتابیس (بدون نیاز به مموری سرور)
+    role = db.get_role(user_id)
+    if role == "support":
+        await update.message.reply_text("✅ شما به عنوان *پشتیبان* ثبت شده‌اید!\n\n📥 تکالیف شاگردانتان اینجا ارسال می‌شوند.\nبرای دیدن تکالیف: /my_homeworks", parse_mode="Markdown")
+        return
+    elif role == "student":
+        support_id = db.get_student_support(user_id)
+        if support_id:
+            support_info = db.get_user(support_id)
+            support_name = support_info['username'] if support_info else "پشتیبان شما"
+            await update.message.reply_text(f"✏️ خوش آمدید! پشتیبان شما *{support_name}* است.\n\nلطفاً تکلیف خود را (متن، عکس، ویس، فیلم یا فایل) مستقیماً بفرستید تا برای ایشان ارسال شود:", parse_mode="Markdown")
+            return
 
-    # ۳. بخش زبان‌آموز
-    support_id = db.get_student_support(user_id)
-    if support_id:
-        await update.message.reply_text("✏️ خوش آمدید! لطفاً تکلیف جدید خود را ارسال کنید:")
-        return STUDENT_SENDING_HOMEWORK
-
-    await update.message.reply_text("سلام! به ربات ارسال تکالیف خوش آمدید. 👋\n\nلطفاً **نام و نام خانوادگی** خود را وارد کنید:")
-    return GETTING_NAME
+    # ۳. اگر کاربر جدید است یا نقشش کامل ثبت نشده
+    keyboard = [
+        [InlineKeyboardButton("🎓 دانش‌آموز", callback_data="role_student")],
+        [InlineKeyboardButton("👨‍🏫 پشتیبان", callback_data="role_support")],
+    ]
+    await update.message.reply_text(f"سلام {username}! 👋\nلطفاً نقش خودت رو انتخاب کن:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    full_name = update.message.text
+async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    role = query.data.split("_")[1]
+    db.set_role(user_id, role)
 
-    if not full_name or len(full_name.strip()) < 3:
-        await update.message.reply_text("❌ لطفاً نام و نام خانوادگی خود را به صورت کامل وارد کنید:")
-        return GETTING_NAME
-
-    db.ensure_user(user_id, full_name.strip())
-    db.set_role(user_id, "student")
-
-    supports = db.get_all_supports()
-    if not supports:
-        await update.message.reply_text("⚠️ هنوز هیچ پشتیبانی در ربات فعال نشده است. (پشتیبان‌ها باید ابتدا حداقل یکبار ربات را /start کنند)")
-        return ConversationHandler.END
-
-    keyboard = [[InlineKeyboardButton(f"👨‍🏫 {s['username']}", callback_data=f"pick_{s['user_id']}")] for s in supports]
-    await update.message.reply_text(f"✅ نام شما به عنوان «{full_name.strip()}» ثبت شد.\n\nحالا لطفاً **پشتیبان** خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return CHOOSING_SUPPORT
+    if role == "support":
+        await query.edit_message_text("✅ ثبت شدی به عنوان *پشتیبان*!\n\n📥 تکالیف شاگردات اینجا میان.\nبرای دیدن تکالیف: /my_homeworks", parse_mode="Markdown")
+    else:
+        supports = db.get_all_supports()
+        if not supports:
+            await query.edit_message_text("⚠️ هنوز هیچ پشتیبانی ثبت نشده.\nکمی بعد دوباره /start بزن.")
+            return
+        keyboard = [[InlineKeyboardButton(f"👨‍🏫 {s['username']}", callback_data=f"pick_{s['user_id']}")] for s in supports]
+        await query.edit_message_text("پشتیبانت رو انتخاب کن:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def pick_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,131 +77,77 @@ async def pick_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     support_id = int(query.data.split("_")[1])
     user_id = query.from_user.id
-
     support = db.get_user(support_id)
     db.set_student_support(user_id, support_id)
-
-    await query.edit_message_text(f"🎉 ثبت‌نام شما تکمیل شد!\n👨‍🏫 پشتیبان تخصصی شما: *{support['username']}*\n\n📝 از این به بعد می‌توانید تکالیف خود را (متن، عکس، ویس، فایل یا ویدیو) بفرستید.", parse_mode="Markdown")
-    return STUDENT_SENDING_HOMEWORK
+    
+    await query.edit_message_text(f"✅ پشتیبانت *{support['username']}* انتخاب شد!\n\n📝 از این به بعد هر زمان عکسی، متن یا ویسی بفرستی مستقیم براش ارسال میشه.", parse_mode="Markdown")
 
 
 async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    username = update.effective_user.username or update.effective_user.first_name
     msg = update.message
     
+    # اول چک میکنیم آیا این کاربر اصلا دانش‌آموز هست یا نه
+    role = db.get_role(user_id)
+    if role != "student":
+        return # اگر پشتیبان یا ناظر پیام عادی فرستادن، ربات واکنشی نشون نده
+
     support_id = db.get_student_support(user_id)
     if not support_id:
-        await msg.reply_text("⚠️ لطفا ابتدا دستور /start را بزنید تا ثبت‌نام شما کامل شود.")
-        return GETTING_NAME
+        await msg.reply_text("⚠️ اول دستور /start رو بزن و پشتیبانت رو انتخاب کن.")
+        return
 
-    user_info = db.get_user(user_id)
-    display_name = user_info["username"] if user_info else (update.effective_user.full_name)
-
+    # ذخیره در دیتابیس
     hw_id = db.save_homework(student_id=user_id, support_id=support_id, message_id=msg.message_id, chat_id=msg.chat_id, caption=msg.caption or msg.text or "")
 
     # ارسال برای پشتیبان
     try:
         await context.bot.forward_message(chat_id=support_id, from_chat_id=msg.chat_id, message_id=msg.message_id)
-        await context.bot.send_message(chat_id=support_id, text=f"📬 تکلیف جدید از *{display_name}*\n🔢 شماره تکلیف: `{hw_id}`\nبرای پاسخ دادن، ابتدا بزن: `/reply {hw_id}`", parse_mode="Markdown")
+        await context.bot.send_message(chat_id=support_id, text=f"📬 تکلیف جدید از *{username}*\n🔢 شماره: `{hw_id}`\nبرای جواب: `/reply {hw_id} [جوابت]`", parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Forward to support error: {e}")
+        logger.error(f"Forward error: {e}")
 
-    # ارسال برای ناظر
+    # ارسال برای ناظر کل
     for sv_id in SUPERVISOR_IDS:
         try:
             await context.bot.forward_message(chat_id=sv_id, from_chat_id=msg.chat_id, message_id=msg.message_id)
             support_info = db.get_user(support_id)
-            await context.bot.send_message(chat_id=sv_id, text=f"👁️ *رصد ناظر*\n👤 زبان‌آموز: {display_name}\n👨‍🏫 پشتیبان: {support_info['username']}\n🔢 شماره تکلیف: `{hw_id}`", parse_mode="Markdown")
+            await context.bot.send_message(chat_id=sv_id, text=f"👁️ تکلیف جدید\n👤 {username} | 👨‍🏫 {support_info['username']}\n🔢 شماره: `{hw_id}`", parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Forward to supervisor error: {e}")
+            logger.error(f"Supervisor error: {e}")
 
-    await msg.reply_text("✅ تکلیف شما با موفقیت ارسال شد! منتظر پاسخ پشتیبان بمانید.")
-    return STUDENT_SENDING_HOMEWORK
+    await msg.reply_text("✅ تکلیفت ارسال شد! منتظر جواب پشتیبانت باش.")
 
-
-# --- بخش جدید: مدیریت پاسخ‌های چندرسانه‌ای پشتیبان ---
 
 async def reply_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
     if db.get_role(user_id) != "support":
-        await update.message.reply_text("❌ این دستور مخصوص پشتیبان‌ها است.")
+        await update.message.reply_text("❌ فقط پشتیبان‌ها می‌تونن جواب بدن.")
         return
-        
     args = context.args
-    if len(args) < 1:
-        await update.message.reply_text("📌 فرمت صحیح: `/reply [شماره تکلیف]`", parse_mode="Markdown")
+    if len(args) < 2:
+        await update.message.reply_text("📌 فرمت: `/reply [شماره] [جواب]`", parse_mode="Markdown")
         return
-        
     try:
         hw_id = int(args[0])
     except ValueError:
-        await update.message.reply_text("❌ شماره تکلیف باید عدد باشد.")
+        await update.message.reply_text("❌ شماره تکلیف باید عدد باشه.")
         return
-        
+    reply_text = " ".join(args[1:])
     hw = db.get_homework(hw_id)
     if not hw:
-        await update.message.reply_text("❌ تکلیفی با این شماره پیدا نشد.")
+        await update.message.reply_text("❌ تکلیف پیدا نشد.")
         return
     if hw["support_id"] != user_id:
-        await update.message.reply_text("❌ شما پشتیبان این زبان‌آموز نیستید.")
+        await update.message.reply_text("❌ این تکلیف متعلق به شاگرد شما نیست.")
         return
-        
-    # ذخیره موقت شماره تکلیف در دیتای کاربر جهت انتظار برای دریافت رسانه
-    context.user_data["active_reply_hw_id"] = hw_id
-    await update.message.reply_text(f"⏳ تکلیف شماره `{hw_id}` انتخاب شد.\n\nحالا پاسخ خود را به هر شکلی که می‌خواهید (**متن، ویس، عکس، ویدیو، فایل**) ارسال کنید تا برای زبان‌آموز فرستاده شود.\n\n(برای انصراف دستور /cancel را بزنید)", parse_mode="Markdown")
-
-
-async def cancel_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "active_reply_hw_id" in context.user_data:
-        context.user_data.pop("active_reply_hw_id", None)
-        await update.message.reply_text("🔄 فرآیند پاسخ‌دهی لغو شد.")
-    else:
-        await update.message.reply_text("❌ شما در حال پاسخ به تکلیفی نیستید.")
-
-
-async def handle_support_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    hw_id = context.user_data.get("active_reply_hw_id")
-    
-    # اگر پشتیبان در حال پاسخ دادن فعال نیست، این تابع کاری انجام ندهد
-    if not hw_id:
-        return
-        
-    msg = update.message
-    hw = db.get_homework(hw_id)
-    if not hw:
-        await msg.reply_text("❌ خطا! تکلیف یافت نشد.")
-        context.user_data.pop("active_reply_hw_id", None)
-        return
-
-    # ثبت متنی در دیتابیس برای لاگ
-    text_content = msg.text or msg.caption or "[پاسخ چندرسانه‌ای]"
-    db.save_reply(hw_id, text_content)
-    
-    # ۱. ارسال تمیز پاسخ برای زبان‌آموز (بدون برچسب فوروارد)
+    db.save_reply(hw_id, reply_text)
     try:
-        await context.bot.send_message(chat_id=hw["student_id"], text=f"📩 پاسخ پشتیبان به تکلیف شماره `{hw_id}`:", parse_mode="Markdown")
-        await context.bot.copy_message(chat_id=hw["student_id"], from_chat_id=msg.chat_id, message_id=msg.message_id)
-        await msg.reply_text("✅ پاسخ شما با موفقیت برای زبان‌آموز ارسال شد.")
+        await context.bot.send_message(chat_id=hw["student_id"], text=f"📩 پشتیبانت جواب داد:\n\n{reply_text}")
+        await update.message.reply_text("✅ جوابت ارسال شد!")
     except Exception as e:
-        logger.error(f"Send reply to student error: {e}")
-        await msg.reply_text("❌ خطا در ارسال پیام به زبان‌آموز.")
-
-    # ۲. ارسال کپی پاسخ برای ناظر کل جهت رصد
-    support_name = update.effective_user.full_name
-    student_info = db.get_user(hw["student_id"])
-    student_name = student_info["username"] if student_info else "ناشناس"
-    
-    for sv_id in SUPERVISOR_IDS:
-        try:
-            await context.bot.send_message(chat_id=sv_id, text=f"👁️ *رصد ناظر* | پاسخ پشتیبان ثبت شد\n👨‍🏫 پشتیبان: {support_name}\n👤 به زبان‌آموز: {student_name}\n🔢 شماره تکلیف: `{hw_id}`\n👇 محتوای پاسخ در پیام زیر:", parse_mode="Markdown")
-            await context.bot.copy_message(chat_id=sv_id, from_chat_id=msg.chat_id, message_id=msg.message_id)
-        except Exception as e:
-            logger.error(f"Send reply log to supervisor error: {e}")
-            
-    # پاک کردن وضعیت پس از اتمام فرآیند
-    context.user_data.pop("active_reply_hw_id", None)
+        logger.error(f"Reply error: {e}")
 
 
 async def my_homeworks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,66 +157,58 @@ async def my_homeworks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     homeworks = db.get_homeworks_for_support(user_id)
     if not homeworks:
-        await update.message.reply_text("📭 هنوز هیچ تکلیفی برای شما ارسال نشده است.")
+        await update.message.reply_text("📭 هنوز هیچ تکلیفی نداری.")
         return
-    text = "📋 *تکالیف اختصاصی شما:*\n\n"
+    text = "📋 *تکالیف دریافتی:*\n\n"
     for hw in homeworks:
-        status = "✅ جواب داده شده" if hw["replied"] else "⏳ منتظر جواب"
-        text += f"🔢 `{hw['id']}` | 👤 {hw['student_name']} | {status}\n📝 {hw['caption'][:80] or '(بدون متن)'}\n─────\n"
-    text += "\nبرای پاسخ دادن: `/reply [شماره]`"
+        status = "✅ جواب داده" if hw["replied"] else "⏳ منتظر جواب"
+        text += f"🔢 `{hw['id']}` | 👤 {hw['student_name']} | {status}\n📝 {hw['caption'][:80] or '(فایل/رسانه)'}\n─────\n"
+    text += "\nبرای جواب: `/reply [شماره] [جواب]`"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def all_homeworks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in SUPERVISOR_IDS:
-        await update.message.reply_text("❌ شما دسترسی ناظر ندارید.")
+        await update.message.reply_text("❌ دسترسی ندارید.")
         return
     homeworks = db.get_all_homeworks()
     if not homeworks:
-        await update.message.reply_text("📭 هیچ تکلیفی در سیستم ثبت نشده است.")
+        await update.message.reply_text("📭 هیچ تکلیفی ثبت نشده.")
         return
-    text = "👁️ *لیست کل تکالیف سیستم (مخصوص ناظر):*\n\n"
+    text = "👁️ *همه تکالیف:*\n\n"
     for hw in homeworks[:20]:
         status = "✅" if hw["replied"] else "⏳"
         text += f"{status} `{hw['id']}` | 👤 {hw['student_name']} | 👨‍🏫 {hw['support_name']}\n"
     total = db.count_homeworks()
     replied = db.count_replied()
-    text += f"\n📊 آمار کل سیستم:\nمجموع تکالیف: {total}\nپاسخ داده شده: {replied}\nبدون پاسخ: {total - replied}"
+    text += f"\n📊 مجموع: {total} | جواب داده: {replied} | بی‌جواب: {total - replied}"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 def main():
     if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN تنظیم نشده است!")
+        raise ValueError("BOT_TOKEN تنظیم نشده!")
     app = Application.builder().token(BOT_TOKEN).build()
     
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            GETTING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
-            CHOOSING_SUPPORT: [CallbackQueryHandler(pick_support, pattern="^pick_")],
-            STUDENT_SENDING_HOMEWORK: [MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.AUDIO | filters.VOICE, receive_homework)],
-        },
-        fallbacks=[CommandHandler("start", start)],
-    )
-    
-    app.add_handler(conv_handler)
+    # هندلرهای اصلی دستورات و دکمه‌ها
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(choose_role, pattern="^role_"))
+    app.add_handler(CallbackQueryHandler(pick_support, pattern="^pick_"))
     app.add_handler(CommandHandler("reply", reply_homework))
-    app.add_handler(CommandHandler("cancel", cancel_reply))
     app.add_handler(CommandHandler("my_homeworks", my_homeworks))
     app.add_handler(CommandHandler("all_homeworks", all_homeworks))
     
-    # هندلر عمومی برای دریافت مدیا/متن پاسخ از پشتیبان رسمی
-    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.VIDEO, handle_support_response))
+    # هندلر سراسری هوشمند: هر مدیا یا متنی که دستور نباشد را به عنوان تکلیف دریافت می‌کند
+    app.add_handler(MessageHandler(
+        (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.VIDEO) & ~filters.COMMAND, 
+        receive_homework
+    ))
     
-    logger.info("Bot started successfully...")
+    logger.info("Bot started...")
     if WEBHOOK_URL:
-        webhook_url_clean = WEBHOOK_URL.rstrip('/')
-        logger.info(f"Starting webhook on port {PORT} with URL {webhook_url_clean}/webhook")
-        app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{webhook_url_clean}/webhook", url_path="webhook")
+        app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{WEBHOOK_URL}/webhook", url_path="/webhook")
     else:
-        logger.info("Starting polling...")
         app.run_polling(drop_pending_updates=True)
 
 
