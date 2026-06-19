@@ -1,7 +1,4 @@
 import os
-import sys
-sys.path.insert(0, "./libs")
-
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -21,7 +18,8 @@ STUDENT_SENDING_HOMEWORK = 3
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SUPERVISOR_IDS = [int(x) for x in os.environ.get("SUPERVISOR_IDS", "").split(",") if x.strip()]
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+# تنظیم آدرس رندر اختصاصی شما به عنوان وب‌هوک پیش‌فرض
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://iranunibot.onrender.com")
 PORT = int(os.environ.get("PORT", 10000))
 
 
@@ -190,8 +188,11 @@ def main():
     app.add_handler(CommandHandler("all_homeworks", all_homeworks))
     logger.info("Bot started...")
     if WEBHOOK_URL:
-        app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{WEBHOOK_URL}/webhook", url_path="/webhook")
+        webhook_url_clean = WEBHOOK_URL.rstrip('/')
+        logger.info(f"Starting webhook on port {PORT} with URL {webhook_url_clean}/webhook")
+        app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{webhook_url_clean}/webhook", url_path="webhook")
     else:
+        logger.info("Starting polling...")
         app.run_polling(drop_pending_updates=True)
 
 
