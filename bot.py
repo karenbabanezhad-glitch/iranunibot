@@ -47,38 +47,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     username = user.username or user.first_name
     
-    try:
-        db.ensure_user(user_id, username)
-    except Exception as db_err:
-        logger.error(f"⚠️ خطا در دیتابیس: {db_err}")
+    try: db.ensure_user(user_id, username)
+    except Exception as db_err: logger.error(f"⚠️ خطا در دیتابیس: {db_err}")
 
-    # ۱. بررسی خودکار وضعیت ناظر کل
+    # ۱. پنل ناظر کل
     if user_id in SUPERVISOR_IDS:
         try: db.set_role(user_id, "supervisor")
         except: pass
+        
+        keyboard = [[InlineKeyboardButton("📊 لیست پشتیبان‌ها و شاگردان", callback_data="sv_view_supports")]]
         await update.message.reply_text(
             "👁️ <b>ناظر کل</b> خوش اومدی!\n\n"
-            "برای دیدن همه تکالیف از /all_homeworks استفاده کن.\n\n"
-            "💡 <i>نکته تست:</i> چون شما ناظر هستید، برای تست ارسال تکلیف حتماً باید از یک اکانت تلگرام دیگر (بدون آیدی ناظر) استفاده کنید.", 
+            "از دکمه زیر می‌تونی وضعیت کل پشتیبان‌ها و شاگردان رو مدیریت کنی:", 
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
         return
 
-    # ۲. بررسی خودکار وضعیت پشتیبان (با پیام خوش‌آمدگویی جدید و جذاب)
+    # ۲. پنل پشتیبان رسمی
     if user_id in SUPPORT_IDS:
         try: db.set_role(user_id, "support")
         except: pass
+        
+        keyboard = [[InlineKeyboardButton("📋 لیست شاگردان من", callback_data=f"support_students:{user_id}")]]
         await update.message.reply_text(
             f"سلام <b>{username}</b> عزیز! به تیم پشتیبانی خوش آمدید 👨‍🏫✨\n\n"
-            f"✅ حساب شما با موفقیت به عنوان <b>پشتیبان رسمی سیستم</b> فعال و ثبت شد.\n\n"
-            f"📥 از این پس تکالیف دانش‌آموزانی که شما را انتخاب کنند، به صورت خودکار همین‌جا برایتان فروارد می‌شود.\n\n"
-            f"🛠️ <b>دستورات کلیدی شما:</b>\n"
-            f"◽️ /my_homeworks ➡️ مشاهده لیست تکالیف دریافتی شما", 
+            f"✅ حساب شما فعال است. برای مدیریت شاگردانتان از دکمه زیر استفاده کنید:", 
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
         return
 
-    # ۳. بررسی وضعیت کاربر عادی از روی دیتابیس
+    # ۳. بررسی وضعیت دانش‌آموز از روی دیتابیس
     role = None
     try: role = db.get_role(user_id)
     except: pass
@@ -105,6 +105,90 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"سلام {username}! 👋\nلطفاً نقش خودت رو انتخاب کن:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+# ── پردازش دکمه‌های منو و ناوبری هوشمند ─────────────────────────────────────
+async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    # الف) ناظر: مشاهده لیست تمام پشتیبان‌ها
+    if data == "sv_view_supports":
+        supports = []
+        try: supports = db.get_all_supports()
+        except: pass
+        
+        keyboard = []
+        for s in supports:
+            keyboard.append([InlineKeyboardButton(f"👨‍🏫 پشتیبان: {s['username']}", callback_data=f"sv_show_subs:{s['user_id']}")])
+        
+        if not keyboard:
+            await query.edit_message_text("⚠️ هیچ پشتیبان فعالی در دیتابیس ثبت نشده است.")
+            return
+            
+        await query.edit_message_text("📊 لیست پشتیبان‌های سیستم:\nیکی را برای مشاهده شاگردانش انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # ب) ناظر: مشاهده شاگردان یک پشتیبان خاص
+    elif data.startswith("sv_show_subs:"):
+        support_id = int(data.split(":")[1])
+        students = []
+        try: students = db.get_support_students(support_id)
+        except: pass
+        
+        keyboard = []
+        for st in students:
+            keyboard.append([InlineKeyboardButton(f"🎓 شاگرد: {st['username']}", callback_data=f"view_hw:{st['user_id']}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت به لیست پشتیبان‌ها", callback_data="sv_view_supports")])
+        await query.edit_message_text(f"👥 لیست شاگردان این پشتیبان:\nبرای دیدن تکالیف هر کدام، روی اسمش کلیک کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # ج) پشتیبان: مشاهده شاگردان مستقیم خود
+    elif data.startswith("support_students:"):
+        support_id = int(data.split(":")[1])
+        students = []
+        try: students = db.get_support_students(support_id)
+        except: pass
+        
+        keyboard = []
+        for st in students:
+            keyboard.append([InlineKeyboardButton(f"🎓 شاگرد: {st['username']}", callback_data=f"view_hw:{st['user_id']}")])
+            
+        if not keyboard:
+            await query.edit_message_text("🤷‍♂️ شما هنوز هیچ شاگردی در سیستم ندارید (کسی شما را انتخاب نکرده است).")
+            return
+            
+        await query.edit_message_text("📋 شاگردان شما:\nبرای دیدن و فوروارد مجدد تکالیف روی اسم شاگرد کلیک کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # د) لینک‌طور: نمایش و بازنشانی تکالیف شاگرد انتخاب شده
+    elif data.startswith("view_hw:"):
+        student_id = int(data.split(":")[1])
+        homeworks = []
+        try: homeworks = db.get_student_homeworks(student_id)
+        except: pass
+        
+        if not homeworks:
+            await context.bot.send_message(chat_id=query.from_user.id, text="ℹ️ این شاگرد هنوز هیچ تکلیفی ارسال نکرده است.")
+            return
+            
+        await context.bot.send_message(chat_id=query.from_user.id, text=f"📥 در حال بازیابی تکالیف شاگرد ({len(homeworks)} تکلیف)...")
+        
+        # بازنشانی و ارسال تکالیف دیتابیس برای فرد درخواست کننده
+        for hw in homeworks:
+            try:
+                await context.bot.forward_message(
+                    chat_id=query.from_user.id,
+                    from_chat_id=hw['chat_id'],
+                    message_id=hw['message_id']
+                )
+                await context.bot.send_message(
+                    chat_id=query.from_user.id,
+                    text=f"🔢 شناسه تکلیف: <code>{hw['id']}</code>\n📝 توضیحات: {hw['caption']}\n\nپاسخ با: <code>/reply {hw['id']} [متن]</code>",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"خطا در بازنشانی تکلیف: {e}")
+
+
+# ── بخش‌های قبلی سیستم (ثبت نقش و دریافت تکالیف) ──────────────────────────
 async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -115,7 +199,7 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
     if role == "support":
-        await query.edit_message_text("✅ ثبت شدی به عنوان <b>پشتیبان</b>!\nبرای دیدن تکالیف: /my_homeworks", parse_mode="HTML")
+        await query.edit_message_text("✅ ثبت شدی به عنوان <b>پشتیبان</b>!\nربات را مجدد /start کنید.", parse_mode="HTML")
     else:
         supports = []
         try: supports = db.get_all_supports()
@@ -135,7 +219,6 @@ async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.edit_message_text("پشتیبانت رو انتخاب کن:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-
 async def pick_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -146,11 +229,9 @@ async def pick_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.set_student_support(user_id, support_id)
         support = db.get_user(support_id)
         name = support['username'] if support else "پشتیبان سیستم"
-    except:
-        name = "پشتیبان سیستم"
+    except: name = "پشتیبان سیستم"
         
     await query.edit_message_text(f"✅ پشتیبانت <b>{name}</b> انتخاب شد!\n\n📝 حالا هر تکلیفی بفرستی مستقیم براش ارسال میشه.", parse_mode="HTML")
-
 
 async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -159,16 +240,8 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg: return
 
     if user_id in SUPERVISOR_IDS or user_id in SUPPORT_IDS:
-        await msg.reply_text(
-            f"🤖 <b>ارتباط زنده است! پیام تست شما دریافت شد.</b>\n\n"
-            f"⚠️ چون شما جزو مدیریت/پشتیبانان هستید، پیام به عنوان تکلیف ذخیره نمی‌شود. "
-            f"برای تست کامل ارسال تکلیف، باید با یک اکانت تلگرام معمولی (دانش‌آموز) پیام بفرستید.", 
-            parse_mode="HTML"
-        )
+        await msg.reply_text("🤖 <b>ارتباط زنده است!</b>\n\n⚠️ پیام شما به عنوان تکلیف ذخیره نمی‌شود چون مدیر/پشتیبان هستید.", parse_mode="HTML")
         return 
-
-    try: role = db.get_role(user_id)
-    except: role = "student"
 
     try: support_id = db.get_student_support(user_id)
     except: support_id = SUPPORT_IDS[0] if SUPPORT_IDS else None
@@ -177,10 +250,8 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("⚠️ پشتیبانی یافت نشد. ابتدا /start بزنید.")
         return
 
-    try:
-        hw_id = db.save_homework(student_id=user_id, support_id=support_id, message_id=msg.message_id, chat_id=msg.chat_id, caption=msg.caption or msg.text or "")
-    except:
-        hw_id = "تست"
+    try: hw_id = db.save_homework(student_id=user_id, support_id=support_id, message_id=msg.message_id, chat_id=msg.chat_id, caption=msg.caption or msg.text or "")
+    except: hw_id = "تست"
 
     try:
         await context.bot.forward_message(chat_id=support_id, from_chat_id=msg.chat_id, message_id=msg.message_id)
@@ -193,13 +264,16 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text("✅ تکلیفت ارسال شد!")
 
-
 def main():
     if not BOT_TOKEN: raise ValueError("BOT_TOKEN تنظیم نشده!")
     threading.Thread(target=start_health_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
+    
+    # متصل کردن هندلر مرکزی منوها و لینک شاگردان
+    app.add_handler(CallbackQueryHandler(handle_menus, pattern="^(sv_|support_students:|view_hw:)"))
+    
     app.add_handler(CallbackQueryHandler(choose_role, pattern="^role_"))
     app.add_handler(CallbackQueryHandler(pick_support, pattern="^pick_"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, receive_homework))
