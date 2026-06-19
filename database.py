@@ -140,3 +140,19 @@ class Database:
             "SELECT COUNT(*) as c FROM homeworks WHERE replied = 1"
         ).fetchone()
         return row["c"]
+
+    def get_support_students(self, support_id: int) -> List[Dict]:
+        """لیست تمام شاگردانی که این پشتیبان را انتخاب کرده‌اند برمی‌گرداند"""
+        rows = self.conn.execute(
+            "SELECT user_id, username FROM users WHERE role='student' AND support_id=?", 
+            (support_id,)
+        ).fetchall()
+        return [{'user_id': r['user_id'], 'username': r['username']} for r in rows]
+
+    def get_student_homeworks(self, student_id: int) -> List[Dict]:
+        """لیست تمام تکالیف ارسال شده توسط یک شاگرد خاص را برمی‌گرداند"""
+        rows = self.conn.execute(
+            "SELECT id, message_id, chat_id, caption FROM homeworks WHERE student_id=?", 
+            (student_id,)
+        ).fetchall()
+        return [{'id': r['id'], 'message_id': r['message_id'], 'chat_id': r['chat_id'], 'caption': r['caption']} for r in rows]
