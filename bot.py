@@ -41,6 +41,72 @@ def start_health_server():
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"❌ یک خطای داخلی رخ داد! جزئیات: {context.error}")
 
+# ── سیستم پاسخگویی پشتیبان به شاگرد (اتصال مسیر برگشت پیام‌ها) ─────────────────
+async def reply_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    msg = update.message
+    
+    # فقط پشتیبان‌ها و ناظرین اجازه پاسخگویی دارند
+    if user_id not in SUPPORT_IDS and user_id not in SUPERVISOR_IDS:
+        await msg.reply_text("⛔ شما دسترسی ارسال پاسخ را ندارید.")
+        return
+
+    # بررسی ساختار درست دستور
+    if not context.args or len(context.args) < 2:
+        await msg.reply_text(
+            "❌ <b>روش استفاده اشتباه است!</b>\n\n"
+            "طرز استفاده: <code>/reply [شماره تکلیف] [متن جواب شما]</code>\n"
+            "مثال: <code>/reply 12 تکلیفت عالی بود، آفرین!</code>", 
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        hw_id = int(context.args[0])
+        reply_text = " ".join(context.args[1:])
+    except ValueError:
+        await msg.reply_text("❌ شماره تکلیف باید یک عدد باشد!")
+        return
+
+    # پیدا کردن اطلاعات تکلیف و شاگرد از دیتابیس
+    hw = db.get_homework(hw_id)
+    if not hw:
+        await msg.reply_text("❌ تکلیفی با این شماره در سیستم پیدا نشد!")
+        return
+
+    student_id = hw['student_id']
+    sender_name = msg.from_user.username or msg.from_user.first_name
+
+    # ۱. ارسال پاسخ مستقیم برای شاگرد
+    try:
+        await context.bot.send_message(
+            chat_id=student_id,
+            text=f"📩 <b>پاسخ پشتیبان به تکلیف شماره {hw_id}:</b>\n\n{reply_text}",
+            parse_mode="HTML"
+        )
+        # ذخیره وضعیت پاسخ در دیتابیس
+        db.save_reply(hw_id, reply_text)
+        await msg.reply_text("✅ پاسخ شما با موفقیت برای شاگرد ارسال و ثبت شد.")
+    except Exception as e:
+        await msg.reply_text(f"❌ خطا در ارسال پیام به شاگرد! احتمالاً ربات را بلاک کرده است. جزئیات: {e}")
+        return
+
+    # ۲. ارسال هم‌زمان رونوشت پاسخ برای ناظرین کل سیستم
+    for sv_id in SUPERVISOR_IDS:
+        if sv_id != user_id:  # اگر خود ناظر جواب نداده بود، براش بفرست
+            try:
+                await context.bot.send_message(
+                    chat_id=sv_id,
+                    text=f"📣 <b>گزارش پاسخ پشتیبان:</b>\n\n"
+                         f"👨‍🏫 پاسخ‌دهنده: <b>{sender_name}</b>\n"
+                         f"🔢 برای تکلیف شماره: <code>{hw_id}</code>\n"
+                         f"📝 متن پاسخ: {reply_text}",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+
+
 # ── منطق اصلی دستور استارت ──────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -50,7 +116,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: db.ensure_user(user_id, username)
     except Exception as db_err: logger.error(f"⚠️ خطا در دیتابیس: {db_err}")
 
-    # ۱. پنل ناظر کل
     if user_id in SUPERVISOR_IDS:
         try: db.set_role(user_id, "supervisor")
         except: pass
@@ -64,7 +129,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ۲. پنل پشتیبان رسمی
     if user_id in SUPPORT_IDS:
         try: db.set_role(user_id, "support")
         except: pass
@@ -78,7 +142,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ۳. بررسی وضعیت دانش‌آموز از روی دیتابیس
     role = None
     try: role = db.get_role(user_id)
     except: pass
@@ -97,7 +160,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except: pass
 
-    # ۴. انتخاب نقش برای کاربر جدید
     keyboard = [
         [InlineKeyboardButton("🎓 دانش‌آموز", callback_data="role_student")],
         [InlineKeyboardButton("👨‍🏫 پشتیبان رسمی", callback_data="role_support")],
@@ -111,7 +173,6 @@ async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    # الف) ناظر: مشاهده لیست تمام پشتیبان‌ها
     if data == "sv_view_supports":
         supports = []
         try: supports = db.get_all_supports()
@@ -127,7 +188,6 @@ async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         await query.edit_message_text("📊 لیست پشتیبان‌های سیستم:\nیکی را برای مشاهده شاگردانش انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # ب) ناظر: مشاهده شاگردان یک پشتیبان خاص
     elif data.startswith("sv_show_subs:"):
         support_id = int(data.split(":")[1])
         students = []
@@ -141,7 +201,6 @@ async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔙 بازگشت به لیست پشتیبان‌ها", callback_data="sv_view_supports")])
         await query.edit_message_text(f"👥 لیست شاگردان این پشتیبان:\nبرای دیدن تکالیف هر کدام، روی اسمش کلیک کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # ج) پشتیبان: مشاهده شاگردان مستقیم خود
     elif data.startswith("support_students:"):
         support_id = int(data.split(":")[1])
         students = []
@@ -158,7 +217,6 @@ async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         await query.edit_message_text("📋 شاگردان شما:\nبرای دیدن و فوروارد مجدد تکالیف روی اسم شاگرد کلیک کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # د) لینک‌طور: نمایش و بازنشانی تکالیف شاگرد انتخاب شده
     elif data.startswith("view_hw:"):
         student_id = int(data.split(":")[1])
         homeworks = []
@@ -171,7 +229,6 @@ async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         await context.bot.send_message(chat_id=query.from_user.id, text=f"📥 در حال بازیابی تکالیف شاگرد ({len(homeworks)} تکلیف)...")
         
-        # بازنشانی و ارسال تکالیف دیتابیس برای فرد درخواست کننده
         for hw in homeworks:
             try:
                 await context.bot.forward_message(
@@ -188,7 +245,6 @@ async def handle_menus(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"خطا در بازنشانی تکلیف: {e}")
 
 
-# ── بخش‌های قبلی سیستم (ثبت نقش و دریافت تکالیف) ──────────────────────────
 async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -239,8 +295,14 @@ async def receive_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg: return
 
+    # اگر پشتیبان/ناظر پیام معمولی و بدون هندلر فرستاد، راهنمایی‌اش کن که چطور پاسخ دهد
     if user_id in SUPERVISOR_IDS or user_id in SUPPORT_IDS:
-        await msg.reply_text("🤖 <b>ارتباط زنده است!</b>\n\n⚠️ پیام شما به عنوان تکلیف ذخیره نمی‌شود چون مدیر/پشتیبان هستید.", parse_mode="HTML")
+        await msg.reply_text(
+            f"🤖 <b>راهنمای سیستم پیام‌رسانی:</b>\n\n"
+            f"پیام شما به عنوان تکلیف ذخیره نشد. برای پاسخ دادن به تکالیف شاگردان، باید از دستور ریپلای استفاده کنید:\n"
+            f"<code>/reply [شماره تکلیف] [متن پاسخ]</code>", 
+            parse_mode="HTML"
+        )
         return 
 
     try: support_id = db.get_student_support(user_id)
@@ -271,9 +333,10 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     
-    # متصل کردن هندلر مرکزی منوها و لینک شاگردان
-    app.add_handler(CallbackQueryHandler(handle_menus, pattern="^(sv_|support_students:|view_hw:)"))
+    # ثبت هندلر حیاتی پاسخگویی به تکالیف
+    app.add_handler(CommandHandler("reply", reply_homework))
     
+    app.add_handler(CallbackQueryHandler(handle_menus, pattern="^(sv_|support_students:|view_hw:)"))
     app.add_handler(CallbackQueryHandler(choose_role, pattern="^role_"))
     app.add_handler(CallbackQueryHandler(pick_support, pattern="^pick_"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, receive_homework))
